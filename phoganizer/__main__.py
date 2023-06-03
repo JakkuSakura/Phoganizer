@@ -25,7 +25,7 @@ counts = {}
 def get_image_filename(image_exif, old_filename):
     """
     Return a new filename for the image based on the shoot time
-    format: YYYY-MM-DD HH-MM-SS.N.{jpg/arw}
+    format: YYYY-MM-DD_HH-MM-SS.N.{jpg/arw}
     """
     tm = get_shoot_time(image_exif).replace(':', '-').replace(' ', '_')
     if tm in counts:
