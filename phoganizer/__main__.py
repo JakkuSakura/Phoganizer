@@ -3,26 +3,23 @@ import os
 import shutil
 import tqdm
 import argparse
+import exiftool
 # return iterator of each image file in directory recursively
 def get_image_files(path):
     for root, dirs, files in os.walk(path):
         for file in files:
-            if file.lower().endswith(('.jpg', '.jpeg', '.png')):
+            if file.lower().endswith(('.jpg', '.jpeg', '.png', '.arw')):
                 yield os.path.join(root, file)
 
 def get_exif_data(image):
-    image = Image.open(image)
-    image_exif = image.getexif()
-    if image_exif is None:
-        return None
-    else:
-        return image_exif
+    with exiftool.ExifToolHelper() as et:
+        metadata = et.get_metadata(image)
+        for d in metadata:
+            return d
 
 def get_shoot_time(image_exif):
-    if image_exif is None:
-        return None
-    else:
-        return image_exif[306]
+    return image_exif["EXIF:DateTimeOriginal"]
+
 
 counts = {}
 def get_image_filename(image_exif, old_filename):
@@ -30,17 +27,15 @@ def get_image_filename(image_exif, old_filename):
     Return a new filename for the image based on the shoot time
     format: YYYY-MM-DD HH-MM-SS.N.{jpg/arw}
     """
-    if image_exif is None:
-        return old_filename
+    tm = get_shoot_time(image_exif).replace(':', '-').replace(' ', '_')
+    if tm in counts:
+        counts[tm] += 1
     else:
-        tm = image_exif[306].replace(':', '-').replace(' ', '_')
-        if tm in counts:
-            counts[tm] += 1
-        else:
-            counts[tm] = 0
-        num = counts[tm]
-        ext = old_filename.split('.')[-1]
-        return tm + '.' + str(num) + '.' + ext
+        counts[tm] = 0
+    num = counts[tm]
+    ext = old_filename.split('.')[-1]
+    return tm + '.' + str(num) + '.' + ext
+
 
 
 
@@ -59,12 +54,6 @@ def main():
         os.makedirs(os.path.join(path, dir_name), exist_ok=True)
         print('moving', filename, 'to', dest)
         shutil.move(filename, dest)
-
-        raw_file = filename.replace('.jpg', '.arw')
-        if os.path.exists(raw_file):
-            raw_dest = dest.replace('.jpg', '.arw')
-            print('moving', filename, 'to', raw_dest)
-            shutil.move(raw_file, raw_dest)
 
         xmp_file = filename.replace('.jpg', '.xmp')
         if os.path.exists(xmp_file):
