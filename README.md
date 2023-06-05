@@ -3,6 +3,7 @@ Organize photos by exif
 
 ## Usage
 ```shell
+brew install exiftool # MacOS, other OS refers to https://exiftool.org/
 pip install -e phoganizer
 python -m phoganizer path/to/photos
 ```
