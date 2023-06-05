@@ -14,14 +14,13 @@ def get_image_files(path):
                 yield os.path.join(root, file)
 
 
-def get_exif_data(image):
-    with exiftool.ExifToolHelper() as et:
-        metadata = et.get_metadata(image)
-        for d in metadata:
-            return d
+def get_exif_data(et: exiftool.ExifToolHelper, image: str):
+    metadata = et.get_metadata(image)
+    for d in metadata:
+        return d
 
 
-def get_shoot_time(image_exif):
+def get_shoot_time(image_exif: dict):
     return image_exif["EXIF:DateTimeOriginal"]
 
 
@@ -54,23 +53,23 @@ def main():
     parser.add_argument('path', metavar='path', type=str, help='path to directory of photos')
     args = parser.parse_args()
     path = args.path
+    with exiftool.ExifToolHelper() as et:
+        for filename in tqdm.tqdm(get_image_files(path)):
+            try:
+                image_exif = get_exif_data(et, filename)
+                shoot_time = get_shoot_time(image_exif)
+                dir_name = shoot_time.split(' ')[0].replace(':', '-')
+                file_name = get_image_filename(image_exif, filename)
+                dest = os.path.join(path, dir_name, file_name)
+                os.makedirs(os.path.join(path, dir_name), exist_ok=True)
+                print('moving', filename, 'to', dest)
+                shutil.move(filename, dest)
+                move_with_ext(filename, dest, 'xmp')
+                move_with_ext(filename, dest, 'xml')
 
-    for filename in tqdm.tqdm(get_image_files(path)):
-        try:
-            image_exif = get_exif_data(filename)
-            shoot_time = get_shoot_time(image_exif)
-            dir_name = shoot_time.split(' ')[0].replace(':', '-')
-            file_name = get_image_filename(image_exif, filename)
-            dest = os.path.join(path, dir_name, file_name)
-            os.makedirs(os.path.join(path, dir_name), exist_ok=True)
-            print('moving', filename, 'to', dest)
-            shutil.move(filename, dest)
-            move_with_ext(filename, dest, 'xmp')
-            move_with_ext(filename, dest, 'xml')
-
-        except Exception as e:
-            print(e)
-            print('failed to move', filename)
+            except Exception as e:
+                print(e)
+                print('failed to move', filename)
 
 
 if __name__ == '__main__':
