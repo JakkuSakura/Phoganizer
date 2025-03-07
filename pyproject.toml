@@ -13,7 +13,9 @@ readme = "README.md"
 requires-python = ">=3.10"
 
 dependencies = [
+    "pillow>=11.1.0",
     "PyExifTool==0.5.6",
+    "tqdm>=4.67.1",
 ]
 
 [dependency-groups]
