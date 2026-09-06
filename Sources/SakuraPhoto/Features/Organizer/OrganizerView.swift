@@ -6,14 +6,15 @@ struct ContentView: View {
     @Environment(AppState.self) private var state
     @State private var choosingFolder = false
     @State private var confirmingOrganization = false
+    @State private var showingSources = false
     var body: some View {
         VStack(spacing: 0) {
             toolbar; overview; Divider()
             if state.plans.isEmpty { emptyState } else { HSplitView { planTable.frame(minWidth: 560, idealWidth: 680); PhotoDetailView(plan: state.selectedPlan).frame(minWidth: 300, idealWidth: 360) } }
             Divider(); statusBar
         }
-        .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder], allowsMultipleSelection: false) { result in
-            switch result { case .success(let urls): if let url = urls.first { state.selectFolder(url) }; case .failure(let error): state.errorMessage = error.localizedDescription }
+        .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder], allowsMultipleSelection: true) { result in
+            switch result { case .success(let urls): for url in urls { state.addSource(url) }; case .failure(let error): state.errorMessage = error.localizedDescription }
         }
         .confirmationDialog("Organize \(state.readyCount.formatted()) photos?", isPresented: $confirmingOrganization) {
             Button("Organize Photos") { state.organize() }; Button("Cancel", role: .cancel) { }
@@ -22,10 +23,18 @@ struct ContentView: View {
     }
     private var toolbar: some View {
         HStack(spacing: 10) {
-            Button { choosingFolder = true } label: { Label("Choose Folder…", systemImage: "folder") }.keyboardShortcut("o")
+            Button { choosingFolder = true } label: { Label("Add Source…", systemImage: "folder.badge.plus") }.keyboardShortcut("o")
             Button { state.scan() } label: { Label("Rescan", systemImage: "arrow.clockwise") }.disabled(state.root == nil || state.isWorking)
             Spacer()
-            if let root = state.root { Label(root.path(percentEncoded: false), systemImage: "folder.fill").font(.callout).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(root.path(percentEncoded: false)) }
+            TextField("Pattern", text: Binding(get: { state.pattern.value }, set: { state.pattern.value = $0 }))
+                .frame(width: 190).textFieldStyle(.roundedBorder)
+                .help("Tokens: {date}, {time}, {seq}, {original}, {class}, {ext}")
+                .onSubmit { state.scan() }
+            if !state.sources.isEmpty {
+                Button { showingSources.toggle() } label: { Label("\(state.sources.count) source\(state.sources.count == 1 ? "" : "s")", systemImage: "externaldrive") }
+                    .buttonStyle(.borderless).foregroundStyle(.secondary)
+                    .popover(isPresented: $showingSources) { SourceListView().environment(state) }
+            }
             Button { confirmingOrganization = true } label: { Label("Organize Photos", systemImage: "wand.and.stars") }.buttonStyle(.borderedProminent).disabled(state.readyCount == 0 || state.isWorking)
         }.controlSize(.small).padding(10)
     }
@@ -33,7 +42,7 @@ struct ContentView: View {
         HStack(spacing: 0) { metric("Photos", state.plans.count, "photo.on.rectangle"); Divider().frame(height: 28); metric("Ready", state.readyCount, "arrow.right.circle"); Divider().frame(height: 28); metric("Sidecars", state.sidecarCount, "doc.badge.gearshape"); Divider().frame(height: 28); metric("Missing date", state.missingDateCount, "exclamationmark.triangle"); Spacer() }.padding(.horizontal, 12).padding(.vertical, 7).background(.quaternary.opacity(0.25))
     }
     private func metric(_ label: String, _ value: Int, _ symbol: String) -> some View { Label { VStack(alignment: .leading, spacing: 1) { Text(value.formatted()).font(.callout.monospaced().bold()); Text(label).font(.caption2).foregroundStyle(.secondary) } } icon: { Image(systemName: symbol).foregroundStyle(.secondary) }.frame(minWidth: 120, alignment: .leading) }
-    private var emptyState: some View { ContentUnavailableView { Label("Organize Photos by Capture Date", systemImage: "photo.stack") } description: { Text("Choose a folder to preview dated folders and filenames before moving anything.") } actions: { Button("Choose Photo Folder…") { choosingFolder = true }.buttonStyle(.borderedProminent) }.frame(maxWidth: .infinity, maxHeight: .infinity) }
+    private var emptyState: some View { ContentUnavailableView { Label("Browse and Organize Photos", systemImage: "photo.stack") } description: { Text("Add one or more folders or a mounted Sony camera disk to preview, classify, and organize photos.") } actions: { Button("Add Photo Source…") { choosingFolder = true }.buttonStyle(.borderedProminent) }.frame(maxWidth: .infinity, maxHeight: .infinity) }
     private var planTable: some View {
         @Bindable var state = state
         return Table(state.plans, selection: $state.selectedPlanID) {
@@ -41,9 +50,27 @@ struct ContentView: View {
             TableColumn("Captured") { plan in if let date = plan.captureDate { Text(date.formatted(date: .abbreviated, time: .standard)) } else { Text("—").foregroundStyle(.secondary) } }.width(min: 145, ideal: 175)
             TableColumn("Destination") { plan in Text(plan.destination?.lastPathComponent ?? "—").font(.callout.monospaced()).foregroundStyle(plan.destination == nil ? .secondary : .primary).lineLimit(1).help(plan.destinationDescription) }.width(min: 190, ideal: 260)
             TableColumn("Status") { plan in PlanStateLabel(state: plan.state) }.width(105)
+            TableColumn("Classify") { plan in
+                Picker("Classification", selection: Binding(get: { plan.classification }, set: { state.classify($0, for: plan.id) })) {
+                    ForEach(PhotoClassification.allCases) { value in Label(value.rawValue, systemImage: value.symbol).tag(value) }
+                }.labelsHidden().pickerStyle(.menu)
+            }.width(120)
         }
     }
     private var statusBar: some View { HStack(spacing: 8) { if state.isWorking { ProgressView().controlSize(.small) } else { Image(systemName: "checkmark.circle").foregroundStyle(.secondary) }; Text(state.activity).font(.caption).foregroundStyle(.secondary); Spacer(); Text("JPEG · PNG · ARW").font(.caption2).foregroundStyle(.tertiary) }.padding(.horizontal, 10).frame(height: 28) }
+}
+
+private struct SourceListView: View {
+    @Environment(AppState.self) private var state
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Sources").font(.headline)
+            ForEach(Array(state.sources.enumerated()), id: \.element.id) { _, source in
+                HStack { Label(source.displayName, systemImage: source.kind.symbol); Spacer(); Button { state.removeSource(source.id) } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless) }
+                    .help(source.root.path(percentEncoded: false))
+            }
+        }.padding(14).frame(width: 300)
+    }
 }
 
 private struct PlanStateLabel: View {

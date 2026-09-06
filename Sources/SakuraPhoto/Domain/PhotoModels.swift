@@ -14,12 +14,14 @@ enum PlanState: Sendable, Equatable {
 }
 
 struct PhotoPlan: Identifiable, Sendable {
+    let sourceID: String
     let source: URL
     let destination: URL?
     let captureDate: Date?
     let sidecars: [URL]
+    var classification: PhotoClassification
     var state: PlanState
-    var id: String { source.path }
+    var id: String { "\(sourceID):\(source.path)" }
     var filename: String { source.lastPathComponent }
     var destinationDescription: String { destination?.path(percentEncoded: false) ?? "Will remain in place" }
 }
