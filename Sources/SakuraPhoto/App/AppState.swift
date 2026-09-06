@@ -18,7 +18,7 @@ final class AppState {
     var selectedPlan: PhotoPlan? { plans.first { $0.id == selectedPlanID } }
 
     var root: URL? { sources.first?.root }
-    func addSource(_ url: URL) { let source = SourceDetector.source(for: url); if !sources.contains(where: { $0.id == source.id }) { sources.append(source); scan() } }
+    func addSource(_ url: URL, scanImmediately: Bool = true) { let source = SourceDetector.source(for: url); if !sources.contains(where: { $0.id == source.id }) { sources.append(source); if scanImmediately { scan() } } }
     func removeSource(_ id: String) { sources.removeAll { $0.id == id }; plans.removeAll { $0.sourceID == id }; selectedPlanID = plans.first?.id }
     func selectFolder(_ url: URL) { sources = [SourceDetector.source(for: url)]; plans = []; selectedPlanID = nil; lastSummary = nil; scan() }
     func scan() {

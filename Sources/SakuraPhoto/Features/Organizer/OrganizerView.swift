@@ -1,29 +1,60 @@
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct ContentView: View {
     @Environment(AppState.self) private var state
-    @State private var choosingFolder = false
     @State private var confirmingOrganization = false
     @State private var showingSources = false
     var body: some View {
-        VStack(spacing: 0) {
-            toolbar; overview; Divider()
-            if state.plans.isEmpty { emptyState } else { HSplitView { planTable.frame(minWidth: 560, idealWidth: 680); PhotoDetailView(plan: state.selectedPlan).frame(minWidth: 300, idealWidth: 360) } }
-            Divider(); statusBar
-        }
-        .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder], allowsMultipleSelection: true) { result in
-            switch result { case .success(let urls): for url in urls { state.addSource(url) }; case .failure(let error): state.errorMessage = error.localizedDescription }
+        TabView {
+            NavigationSplitView {
+                SourceSidebar(addSource: openSourcePanel)
+            } detail: {
+                VStack(spacing: 0) {
+                    reviewHeader
+                    Divider()
+                    if state.plans.isEmpty { emptyState } else {
+                        overview
+                        Divider()
+                        HSplitView {
+                            planTable.frame(minWidth: 560, idealWidth: 680)
+                            PhotoDetailView(plan: state.selectedPlan).frame(minWidth: 300, idealWidth: 360)
+                        }
+                    }
+                    Divider(); statusBar
+                }
+            }
+            .tabItem { Label("Review", systemImage: "photo.on.rectangle") }
+            SourceManagementView()
+                .tabItem { Label("Sources", systemImage: "externaldrive") }
         }
         .confirmationDialog("Organize \(state.readyCount.formatted()) photos?", isPresented: $confirmingOrganization) {
             Button("Organize Photos") { state.organize() }; Button("Cancel", role: .cancel) { }
         } message: { Text("Photos and matching sidecars will move into dated folders. Existing files will not be overwritten.") }
         .alert("SakuraPhoto", isPresented: Binding(get: { state.errorMessage != nil }, set: { if !$0 { state.errorMessage = nil } })) { Button("OK") { state.errorMessage = nil } } message: { Text(state.errorMessage ?? "Unknown error") }
     }
+
+    private var reviewHeader: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Review Photos").font(.title2.bold())
+                Text(state.sources.isEmpty ? "Add a source to begin" : "Review, classify, and prepare your organization")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            Spacer()
+            TextField("Rename pattern", text: Binding(get: { state.pattern.value }, set: { state.pattern.value = $0 }))
+                .textFieldStyle(.roundedBorder).frame(width: 220)
+                .help("Tokens: {date}, {time}, {seq}, {original}, {class}, {ext}")
+                .onSubmit { state.scan() }
+            Button { state.scan() } label: { Label("Scan", systemImage: "magnifyingglass") }
+                .disabled(state.sources.isEmpty || state.isWorking)
+            Button { confirmingOrganization = true } label: { Label("Organize", systemImage: "arrow.right.circle.fill") }
+                .buttonStyle(.borderedProminent).disabled(state.readyCount == 0 || state.isWorking)
+        }.padding(.horizontal, 18).padding(.vertical, 12)
+    }
     private var toolbar: some View {
         HStack(spacing: 10) {
-            Button { choosingFolder = true } label: { Label("Add Source…", systemImage: "folder.badge.plus") }.keyboardShortcut("o")
+            Menu { Button { openSourcePanel() } label: { Label("Choose Folder or SD Card…", systemImage: "folder.badge.plus") }; ForEach(CommonPhotoLocations.locations, id: \.0) { location in Button { state.addSource(location.1) } label: { Label(location.0, systemImage: location.2) } } } label: { Label("Add Source…", systemImage: "folder.badge.plus") }.keyboardShortcut("o")
             Button { state.scan() } label: { Label("Rescan", systemImage: "arrow.clockwise") }.disabled(state.root == nil || state.isWorking)
             Spacer()
             TextField("Pattern", text: Binding(get: { state.pattern.value }, set: { state.pattern.value = $0 }))
@@ -38,11 +69,24 @@ struct ContentView: View {
             Button { confirmingOrganization = true } label: { Label("Organize Photos", systemImage: "wand.and.stars") }.buttonStyle(.borderedProminent).disabled(state.readyCount == 0 || state.isWorking)
         }.controlSize(.small).padding(10)
     }
+
+    private func openSourcePanel() {
+        let panel = NSOpenPanel()
+        panel.title = "Add Photo Sources"
+        panel.message = "Choose folders, Photos, Downloads, Desktop, or a mounted Sony SD card."
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.canCreateDirectories = false
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls { state.addSource(url, scanImmediately: false) }
+        state.scan()
+    }
     private var overview: some View {
         HStack(spacing: 0) { metric("Photos", state.plans.count, "photo.on.rectangle"); Divider().frame(height: 28); metric("Ready", state.readyCount, "arrow.right.circle"); Divider().frame(height: 28); metric("Sidecars", state.sidecarCount, "doc.badge.gearshape"); Divider().frame(height: 28); metric("Missing date", state.missingDateCount, "exclamationmark.triangle"); Spacer() }.padding(.horizontal, 12).padding(.vertical, 7).background(.quaternary.opacity(0.25))
     }
     private func metric(_ label: String, _ value: Int, _ symbol: String) -> some View { Label { VStack(alignment: .leading, spacing: 1) { Text(value.formatted()).font(.callout.monospaced().bold()); Text(label).font(.caption2).foregroundStyle(.secondary) } } icon: { Image(systemName: symbol).foregroundStyle(.secondary) }.frame(minWidth: 120, alignment: .leading) }
-    private var emptyState: some View { ContentUnavailableView { Label("Browse and Organize Photos", systemImage: "photo.stack") } description: { Text("Add one or more folders or a mounted Sony camera disk to preview, classify, and organize photos.") } actions: { Button("Add Photo Source…") { choosingFolder = true }.buttonStyle(.borderedProminent) }.frame(maxWidth: .infinity, maxHeight: .infinity) }
+    private var emptyState: some View { ContentUnavailableView { Label("Browse and Organize Photos", systemImage: "photo.stack") } description: { Text("Add one or more folders or a mounted Sony camera disk to preview, classify, and organize photos.") } actions: { Button("Add Photo Source…") { openSourcePanel() }.buttonStyle(.borderedProminent) }.frame(maxWidth: .infinity, maxHeight: .infinity) }
     private var planTable: some View {
         @Bindable var state = state
         return Table(state.plans, selection: $state.selectedPlanID) {
@@ -57,7 +101,90 @@ struct ContentView: View {
             }.width(120)
         }
     }
-    private var statusBar: some View { HStack(spacing: 8) { if state.isWorking { ProgressView().controlSize(.small) } else { Image(systemName: "checkmark.circle").foregroundStyle(.secondary) }; Text(state.activity).font(.caption).foregroundStyle(.secondary); Spacer(); Text("JPEG · PNG · ARW").font(.caption2).foregroundStyle(.tertiary) }.padding(.horizontal, 10).frame(height: 28) }
+    private var statusBar: some View { HStack(spacing: 8) { if state.isWorking { ProgressView().controlSize(.small) } else { Image(systemName: "checkmark.circle").foregroundStyle(.secondary) }; Text(state.activity).font(.caption).foregroundStyle(.secondary); Spacer(); Text("JPEG · PNG · ARW · HEIF/HIF").font(.caption2).foregroundStyle(.tertiary) }.padding(.horizontal, 10).frame(height: 28) }
+}
+
+private struct SourceManagementView: View {
+    @Environment(AppState.self) private var state
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Photo Sources").font(.title2.bold())
+                    Text("Manage folders, Photos, and mounted Sony A7R V cards.").foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button { openPanel() } label: { Label("Add Source…", systemImage: "plus") }.buttonStyle(.borderedProminent)
+                Button("Scan All") { state.scan() }.disabled(state.sources.isEmpty || state.isWorking)
+            }.padding(20)
+            Divider()
+            if state.sources.isEmpty {
+                ContentUnavailableView("No Sources", systemImage: "externaldrive.badge.plus", description: Text("Add a folder or mounted camera card to start browsing."))
+            } else {
+                List {
+                    ForEach(Array(state.sources.enumerated()), id: \.element.id) { _, source in
+                        HStack(spacing: 12) {
+                            Image(systemName: source.kind.symbol).font(.title3).foregroundStyle(Color.accentColor)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(source.displayName).font(.headline)
+                                Text(source.kind.rawValue).font(.caption).foregroundStyle(.secondary)
+                                Text(source.root.path(percentEncoded: false)).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                            }
+                            Spacer()
+                            Text("\(source.scanRoots.count) media root\(source.scanRoots.count == 1 ? "" : "s")").font(.caption).foregroundStyle(.secondary)
+                            Button { state.removeSource(source.id) } label: { Image(systemName: "trash") }.buttonStyle(.borderless).foregroundStyle(.red)
+                        }.padding(.vertical, 5)
+                    }
+                }
+            }
+        }
+        .frame(minWidth: 720, minHeight: 420)
+    }
+
+    private func openPanel() {
+        let panel = NSOpenPanel(); panel.title = "Add Photo Sources"; panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.allowsMultipleSelection = true; panel.canCreateDirectories = false
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls { state.addSource(url, scanImmediately: false) }
+        state.scan()
+    }
+}
+
+private struct SourceSidebar: View {
+    @Environment(AppState.self) private var state
+    let addSource: () -> Void
+
+    var body: some View {
+        List {
+            Section("Sources") {
+                if state.sources.isEmpty {
+                    Text("No sources added").font(.callout).foregroundStyle(.secondary)
+                }
+                ForEach(Array(state.sources.enumerated()), id: \.element.id) { _, source in
+                    HStack(spacing: 8) {
+                        Image(systemName: source.kind.symbol).foregroundStyle(Color.accentColor)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(source.displayName).lineLimit(1)
+                            Text(source.kind.rawValue).font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button { state.removeSource(source.id) } label: { Image(systemName: "minus.circle") }
+                            .buttonStyle(.borderless).foregroundStyle(.secondary)
+                    }
+                    .help(source.root.path(percentEncoded: false))
+                }
+            }
+            Section("Quick Add") {
+                Button { addSource() } label: { Label("Folder or SD Card…", systemImage: "plus") }
+                ForEach(CommonPhotoLocations.locations, id: \.0) { location in
+                    Button { state.addSource(location.1) } label: { Label(location.0, systemImage: location.2) }
+                }
+            }
+        }
+        .listStyle(.sidebar)
+        .navigationTitle("SakuraPhoto")
+        .toolbar { ToolbarItem { Button { state.scan() } label: { Image(systemName: "arrow.clockwise") }.disabled(state.sources.isEmpty || state.isWorking) } }
+    }
 }
 
 private struct SourceListView: View {

@@ -2,18 +2,25 @@ import Foundation
 import ImageIO
 
 actor LocalPhotoDataStore: PhotoDataStore {
-    private let supportedExtensions = Set(["jpg", "jpeg", "png", "arw"])
+    private let supportedExtensions = Set(["jpg", "jpeg", "png", "arw", "hif", "heif", "heic"])
     private let sidecarExtensions = Set(["xmp", "xml"])
 
     func scan(_ source: any PhotoSource, pattern: RenamePattern = RenamePattern()) throws -> [PhotoPlan] {
         let root = source.root
         let scoped = root.startAccessingSecurityScopedResource()
         defer { if scoped { root.stopAccessingSecurityScopedResource() } }
-        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { throw OrganizerError.cannotReadDirectory(root.path(percentEncoded: false)) }
-        let files = enumerator.compactMap { $0 as? URL }.filter { supportedExtensions.contains($0.pathExtension.lowercased()) }.sorted { $0.path < $1.path }
+        let files = source.scanRoots.flatMap { mediaRoot -> [URL] in
+            var options: FileManager.DirectoryEnumerationOptions = [.skipsHiddenFiles, .skipsPackageDescendants]
+            if mediaRoot.pathExtension == "photoslibrary" { options.remove(.skipsPackageDescendants) }
+            guard let enumerator = FileManager.default.enumerator(at: mediaRoot, includingPropertiesForKeys: [.isRegularFileKey], options: options) else { return [] }
+            return enumerator.compactMap { $0 as? URL }.filter { supportedExtensions.contains($0.pathExtension.lowercased()) }
+        }.sorted { $0.path < $1.path }
         var reserved = Set<String>(); var counters: [String: Int] = [:]
         return files.map { photo in
             guard let date = captureDate(for: photo) else { return PhotoPlan(sourceID: source.id, source: photo, destination: nil, captureDate: nil, sidecars: sidecars(for: photo), classification: .unclassified, state: .missingCaptureDate) }
+            if root.pathExtension == "photoslibrary" {
+                return PhotoPlan(sourceID: source.id, source: photo, destination: nil, captureDate: date, sidecars: sidecars(for: photo), classification: .unclassified, state: .alreadyOrganized)
+            }
             let folder = Self.dayFormatter.string(from: date); let timestamp = Self.filenameFormatter.string(from: date); let ext = photo.pathExtension.lowercased(); let key = "\(timestamp).\(ext)"
             var count = counters[key, default: 0]; var destination: URL
             repeat {

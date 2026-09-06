@@ -5,7 +5,8 @@ capture dates from image metadata, previews the changes, then sorts photos into
 date folders using names such as `2026-09-06_17-42-03.0.jpg`.
 
 The scan and organization happen entirely on the Mac. JPEG, PNG, and Sony ARW
-files are supported. Matching XMP and XML sidecars move with each photo.
+files are supported, including the Sony A7R V's ARW and HEIF/HIF captures.
+Matching XMP and XML sidecars move with each photo.
 
 ## Project structure
 
@@ -20,6 +21,10 @@ The Swift package is organized by responsibility:
 `PhotoDataStore` is the extension point for future stores. The current local
 implementation handles regular folders and Sony A7R V camera media through the
 same source protocol.
+
+Sony cards can be selected at their mounted volume root. SakuraPhoto recognizes
+the camera's `DCIM`, `MP_ROOT`, and `PRIVATE/M4ROOT/CLIP` directories and scans
+the media folders without treating unrelated card files as photos.
 
 ## Run
 

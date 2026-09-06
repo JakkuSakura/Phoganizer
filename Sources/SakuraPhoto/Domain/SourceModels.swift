@@ -12,6 +12,7 @@ protocol PhotoSource: Sendable {
     var root: URL { get }
     var kind: PhotoSourceKind { get }
     var displayName: String { get }
+    var scanRoots: [URL] { get }
 }
 
 protocol PhotoDataStore: Sendable {
@@ -24,6 +25,7 @@ struct FolderPhotoSource: PhotoSource {
     var id: String { root.path }
     let kind: PhotoSourceKind = .folder
     var displayName: String { root.lastPathComponent }
+    var scanRoots: [URL] { [root] }
 }
 
 struct SonyCameraSource: PhotoSource {
@@ -31,16 +33,36 @@ struct SonyCameraSource: PhotoSource {
     var id: String { root.path }
     let kind: PhotoSourceKind = .sonyCamera
     var displayName: String { "Sony A7R V · \(root.lastPathComponent)" }
+    var scanRoots: [URL] {
+        let candidates = ["DCIM", "MP_ROOT", "PRIVATE/M4ROOT/CLIP"]
+        let roots = candidates.map { root.appending(path: $0) }.filter { FileManager.default.fileExists(atPath: $0.path) }
+        return roots.isEmpty ? [root] : roots
+    }
 }
 
 enum SourceDetector {
     static func source(for url: URL) -> any PhotoSource {
         let name = (try? url.resourceValues(forKeys: [.volumeNameKey]).volumeName) ?? ""
         let path = url.path.uppercased()
-        if name.uppercased().contains("SONY") || path.hasSuffix("/DCIM") || path.contains("/DCIM/") {
+        let sonyDirectories = ["DCIM", "MP_ROOT", "PRIVATE/M4ROOT"]
+            .map { url.appending(path: $0) }
+            .contains { FileManager.default.fileExists(atPath: $0.path) }
+        if name.uppercased().contains("SONY") || path.hasSuffix("/DCIM") || path.contains("/DCIM/") || sonyDirectories {
             return SonyCameraSource(root: url)
         }
         return FolderPhotoSource(root: url)
+    }
+}
+
+enum CommonPhotoLocations {
+    static var locations: [(String, URL, String)] {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return [
+            ("Photos", home.appending(path: "Photos"), "photo.on.rectangle"),
+            ("Pictures", home.appending(path: "Pictures"), "photo"),
+            ("Downloads", home.appending(path: "Downloads"), "arrow.down.circle"),
+            ("Desktop", home.appending(path: "Desktop"), "desktopcomputer")
+        ].filter { FileManager.default.fileExists(atPath: $0.1.path) }
     }
 }
 
