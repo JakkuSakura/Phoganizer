@@ -22,6 +22,12 @@ The Swift package is organized by responsibility:
 implementation handles regular folders and Sony A7R V camera media through the
 same source protocol.
 
+Sources are identified by volume UUID plus their path relative to that volume,
+so removable media continues to be recognized when macOS assigns it a new mount
+name. Source bookmarks and the last known location are saved under
+`~/Library/Application Support/SakuraPhoto/workspace.json`; unavailable cards
+are shown as offline until remounted.
+
 Sony cards can be selected at their mounted volume root. SakuraPhoto recognizes
 the camera's `DCIM`, `MP_ROOT`, and `PRIVATE/M4ROOT/CLIP` directories and scans
 the media folders without treating unrelated card files as photos.

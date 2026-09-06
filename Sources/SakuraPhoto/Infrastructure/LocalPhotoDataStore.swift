@@ -5,8 +5,8 @@ actor LocalPhotoDataStore: PhotoDataStore {
     private let supportedExtensions = Set(["jpg", "jpeg", "png", "arw", "hif", "heif", "heic"])
     private let sidecarExtensions = Set(["xmp", "xml"])
 
-    func scan(_ source: any PhotoSource, pattern: RenamePattern = RenamePattern()) throws -> [PhotoPlan] {
-        let root = source.root
+    func scan(_ source: PhotoSource, pattern: RenamePattern = RenamePattern()) throws -> [PhotoPlan] {
+        guard let root = source.root else { return [] }
         let scoped = root.startAccessingSecurityScopedResource()
         defer { if scoped { root.stopAccessingSecurityScopedResource() } }
         let files = source.scanRoots.flatMap { mediaRoot -> [URL] in
@@ -17,19 +17,20 @@ actor LocalPhotoDataStore: PhotoDataStore {
         }.sorted { $0.path < $1.path }
         var reserved = Set<String>(); var counters: [String: Int] = [:]
         return files.map { photo in
-            guard let date = captureDate(for: photo) else { return PhotoPlan(sourceID: source.id, source: photo, destination: nil, captureDate: nil, sidecars: sidecars(for: photo), classification: .unclassified, state: .missingCaptureDate) }
+            guard let date = captureDate(for: photo) else { return PhotoPlan(sourceID: source.id, source: photo, destination: nil, captureDate: nil, sidecars: sidecars(for: photo), writePolicy: source.writePolicy, classification: .unclassified, state: .missingCaptureDate) }
             if root.pathExtension == "photoslibrary" {
-                return PhotoPlan(sourceID: source.id, source: photo, destination: nil, captureDate: date, sidecars: sidecars(for: photo), classification: .unclassified, state: .alreadyOrganized)
+                return PhotoPlan(sourceID: source.id, source: photo, destination: nil, captureDate: date, sidecars: sidecars(for: photo), writePolicy: .browseOnly, classification: .unclassified, state: .readOnly)
             }
+            guard let destinationRoot = source.destinationRoot else { return PhotoPlan(sourceID: source.id, source: photo, destination: nil, captureDate: date, sidecars: sidecars(for: photo), writePolicy: source.writePolicy, classification: .unclassified, state: .readOnly) }
             let folder = Self.dayFormatter.string(from: date); let timestamp = Self.filenameFormatter.string(from: date); let ext = photo.pathExtension.lowercased(); let key = "\(timestamp).\(ext)"
             var count = counters[key, default: 0]; var destination: URL
             repeat {
                 let rendered = Self.render(pattern.value, date: date, sequence: count, original: photo.deletingPathExtension().lastPathComponent, ext: ext, classification: .unclassified)
                 let relative = rendered.contains("/") ? rendered : "\(folder)/\(rendered)"
-                destination = root.appending(path: relative); count += 1
+                destination = destinationRoot.appending(path: relative); count += 1
             } while destination.path != photo.path && (reserved.contains(destination.path) || FileManager.default.fileExists(atPath: destination.path))
             counters[key] = count; reserved.insert(destination.path)
-            return PhotoPlan(sourceID: source.id, source: photo, destination: destination, captureDate: date, sidecars: sidecars(for: photo), classification: .unclassified, state: destination.path == photo.path ? .alreadyOrganized : .ready)
+            return PhotoPlan(sourceID: source.id, source: photo, destination: destination, captureDate: date, sidecars: sidecars(for: photo), writePolicy: source.writePolicy, classification: .unclassified, state: destination.path == photo.path ? .alreadyOrganized : .ready)
         }
     }
 
@@ -38,8 +39,7 @@ actor LocalPhotoDataStore: PhotoDataStore {
         return values.reduce(pattern) { $0.replacingOccurrences(of: $1.key, with: $1.value) }
     }
 
-    func organize(_ plans: [PhotoPlan], root: URL) -> ([PhotoPlan], OrganizationSummary) {
-        let scoped = root.startAccessingSecurityScopedResource(); defer { if scoped { root.stopAccessingSecurityScopedResource() } }
+    func organize(_ plans: [PhotoPlan]) -> ([PhotoPlan], OrganizationSummary) {
         var result = plans; var organized = 0; var failed = 0
         for index in result.indices where result[index].state.canOrganize {
             guard let destination = result[index].destination else { continue }
@@ -50,17 +50,29 @@ actor LocalPhotoDataStore: PhotoDataStore {
     }
 
     private func move(_ plan: PhotoPlan, to destination: URL) throws {
+        let sourceScoped = plan.source.startAccessingSecurityScopedResource()
+        let destinationScoped = destination.startAccessingSecurityScopedResource()
+        defer {
+            if sourceScoped { plan.source.stopAccessingSecurityScopedResource() }
+            if destinationScoped { destination.stopAccessingSecurityScopedResource() }
+        }
         let manager = FileManager.default; try manager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         guard !manager.fileExists(atPath: destination.path) else { throw CocoaError(.fileWriteFileExists) }
         var moved: [(URL, URL)] = []
         do {
-            try manager.moveItem(at: plan.source, to: destination); moved.append((plan.source, destination))
+            if case .copyToFolder = plan.writePolicy { try manager.copyItem(at: plan.source, to: destination) } else { try manager.moveItem(at: plan.source, to: destination) }
+            moved.append((plan.source, destination))
             for sidecar in plan.sidecars {
                 let target = destination.deletingPathExtension().appendingPathExtension(sidecar.pathExtension.lowercased())
                 guard !manager.fileExists(atPath: target.path) else { throw CocoaError(.fileWriteFileExists) }
-                try manager.moveItem(at: sidecar, to: target); moved.append((sidecar, target))
+                if case .copyToFolder = plan.writePolicy { try manager.copyItem(at: sidecar, to: target) } else { try manager.moveItem(at: sidecar, to: target) }; moved.append((sidecar, target))
             }
-        } catch { for (from, to) in moved.reversed() where manager.fileExists(atPath: to.path) { try? manager.moveItem(at: to, to: from) }; throw error }
+        } catch {
+            for (from, to) in moved.reversed() where manager.fileExists(atPath: to.path) {
+                if case .copyToFolder = plan.writePolicy { try? manager.removeItem(at: to) } else { try? manager.moveItem(at: to, to: from) }
+            }
+            throw error
+        }
     }
 
     private func captureDate(for url: URL) -> Date? {

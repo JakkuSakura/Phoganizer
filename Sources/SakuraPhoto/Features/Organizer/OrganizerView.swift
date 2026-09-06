@@ -46,6 +46,11 @@ struct ContentView: View {
                 .textFieldStyle(.roundedBorder).frame(width: 220)
                 .help("Tokens: {date}, {time}, {seq}, {original}, {class}, {ext}")
                 .onSubmit { state.scan() }
+            Picker("Filter", selection: Binding(get: { state.classificationFilter }, set: { state.classificationFilter = $0 })) {
+                Text("All photos").tag(Optional<PhotoClassification>.none)
+                ForEach(PhotoClassification.allCases) { value in Text(value.rawValue).tag(Optional(value)) }
+            }
+            .labelsHidden().frame(width: 125)
             Button { state.scan() } label: { Label("Scan", systemImage: "magnifyingglass") }
                 .disabled(state.sources.isEmpty || state.isWorking)
             Button { confirmingOrganization = true } label: { Label("Organize", systemImage: "arrow.right.circle.fill") }
@@ -89,7 +94,7 @@ struct ContentView: View {
     private var emptyState: some View { ContentUnavailableView { Label("Browse and Organize Photos", systemImage: "photo.stack") } description: { Text("Add one or more folders or a mounted Sony camera disk to preview, classify, and organize photos.") } actions: { Button("Add Photo Source…") { openSourcePanel() }.buttonStyle(.borderedProminent) }.frame(maxWidth: .infinity, maxHeight: .infinity) }
     private var planTable: some View {
         @Bindable var state = state
-        return Table(state.plans, selection: $state.selectedPlanID) {
+        return Table(state.visiblePlans, selection: $state.selectedPlanID) {
             TableColumn("Photo") { plan in Label(plan.filename, systemImage: "photo").lineLimit(1) }
             TableColumn("Captured") { plan in if let date = plan.captureDate { Text(date.formatted(date: .abbreviated, time: .standard)) } else { Text("—").foregroundStyle(.secondary) } }.width(min: 145, ideal: 175)
             TableColumn("Destination") { plan in Text(plan.destination?.lastPathComponent ?? "—").font(.callout.monospaced()).foregroundStyle(plan.destination == nil ? .secondary : .primary).lineLimit(1).help(plan.destinationDescription) }.width(min: 190, ideal: 260)
@@ -128,11 +133,18 @@ private struct SourceManagementView: View {
                             Image(systemName: source.kind.symbol).font(.title3).foregroundStyle(Color.accentColor)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(source.displayName).font(.headline)
-                                Text(source.kind.rawValue).font(.caption).foregroundStyle(.secondary)
-                                Text(source.root.path(percentEncoded: false)).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                                Text(source.kind.label).font(.caption).foregroundStyle(.secondary)
+                                Text("\(source.availabilityLabel) · \(Int(source.detectionConfidence * 100))% confidence").font(.caption2).foregroundStyle(source.isMounted ? .green : .orange)
+                                Text(source.root?.path(percentEncoded: false) ?? source.lastKnownPath).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                             }
                             Spacer()
                             Text("\(source.scanRoots.count) media root\(source.scanRoots.count == 1 ? "" : "s")").font(.caption).foregroundStyle(.secondary)
+                            Menu {
+                                Button("Browse only") { state.setWritePolicy(.browseOnly, for: source.id) }
+                                Button("Organize in place") { state.setWritePolicy(.organizeInPlace, for: source.id) }
+                                Button("Copy to folder…") { chooseCopyDestination(for: source.id) }
+                            } label: { Label(source.writePolicy.label, systemImage: "arrow.triangle.2.circlepath") }
+                            .menuStyle(.borderlessButton).controlSize(.small)
                             Button { state.removeSource(source.id) } label: { Image(systemName: "trash") }.buttonStyle(.borderless).foregroundStyle(.red)
                         }.padding(.vertical, 5)
                     }
@@ -147,6 +159,12 @@ private struct SourceManagementView: View {
         guard panel.runModal() == .OK else { return }
         for url in panel.urls { state.addSource(url, scanImmediately: false) }
         state.scan()
+    }
+
+    private func chooseCopyDestination(for id: String) {
+        let panel = NSOpenPanel(); panel.title = "Choose Copy Destination"; panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        state.setWritePolicy(.copyToFolder(url), for: id)
     }
 }
 
@@ -165,13 +183,13 @@ private struct SourceSidebar: View {
                         Image(systemName: source.kind.symbol).foregroundStyle(Color.accentColor)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(source.displayName).lineLimit(1)
-                            Text(source.kind.rawValue).font(.caption2).foregroundStyle(.secondary)
+                            Text(source.kind.label).font(.caption2).foregroundStyle(.secondary)
                         }
                         Spacer()
                         Button { state.removeSource(source.id) } label: { Image(systemName: "minus.circle") }
                             .buttonStyle(.borderless).foregroundStyle(.secondary)
                     }
-                    .help(source.root.path(percentEncoded: false))
+                    .help(source.root?.path(percentEncoded: false) ?? source.lastKnownPath)
                 }
             }
             Section("Quick Add") {
@@ -194,7 +212,7 @@ private struct SourceListView: View {
             Text("Sources").font(.headline)
             ForEach(Array(state.sources.enumerated()), id: \.element.id) { _, source in
                 HStack { Label(source.displayName, systemImage: source.kind.symbol); Spacer(); Button { state.removeSource(source.id) } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless) }
-                    .help(source.root.path(percentEncoded: false))
+                    .help(source.root?.path(percentEncoded: false) ?? source.lastKnownPath)
             }
         }.padding(14).frame(width: 300)
     }
@@ -203,7 +221,7 @@ private struct SourceListView: View {
 private struct PlanStateLabel: View {
     let state: PlanState
     var body: some View { Label(state.label, systemImage: state.symbol).font(.caption).foregroundStyle(color).help(helpText) }
-    private var color: Color { switch state { case .ready: .blue; case .alreadyOrganized, .completed: .green; case .missingCaptureDate: .orange; case .failed: .red } }
+    private var color: Color { switch state { case .ready: .blue; case .alreadyOrganized, .completed: .green; case .readOnly: .secondary; case .missingCaptureDate: .orange; case .failed: .red } }
     private var helpText: String { if case .failed(let message) = state { return message }; return state.label }
 }
 
